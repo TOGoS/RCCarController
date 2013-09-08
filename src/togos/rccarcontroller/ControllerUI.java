@@ -1,5 +1,9 @@
 package togos.rccarcontroller;
 
+import gnu.io.CommPort;
+import gnu.io.CommPortIdentifier;
+import gnu.io.SerialPort;
+
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Frame;
@@ -12,6 +16,8 @@ import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.geom.AffineTransform;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -98,7 +104,52 @@ public class ControllerUI
 		}
 	}
 	
-	public static void main( String[] args ) {
+	static class RCCarControl {
+		final OutputStream controlStream;
+		
+		public RCCarControl( OutputStream controlStream ) {
+			this.controlStream = controlStream;
+		}
+		
+		static RCCarControl forSerialPort( String portName ) throws Exception {
+			CommPortIdentifier portIdentifier = CommPortIdentifier.getPortIdentifier(portName);
+	        if( portIdentifier.isCurrentlyOwned() ) {
+	            throw new IOException("Error: Port is currently in use");
+	        }
+	        
+	        CommPort commPort = portIdentifier.open("RC Car Controller", 2000);
+	        if( !(commPort instanceof SerialPort) ) {
+	        	throw new IOException("Error: Comm port's not a serial port, but a "+commPort.getClass());
+	        }
+	        
+	        SerialPort serialPort = (SerialPort) commPort;
+	        return new RCCarControl( serialPort.getOutputStream() );
+		}
+		
+		public String formatNumber( int n ) {
+			return n < 0 ? ("0 "+(-n)+" -") : ""+n;
+		}
+		
+		int oldSpeed, oldTurniness;
+		
+		public void setGoingness( boolean forward, boolean backward, boolean left, boolean right ) throws IOException {
+			int speed = forward ? 255 : backward ? -255 : 0;
+			int turniness = left ? -255 : right ? 255 : 0;
+			
+			String commands = "";
+			if( speed != oldSpeed ) commands += "1 "+formatNumber(speed)+" set-motor-speed\n";
+			if( turniness != oldTurniness) commands += "3 "+formatNumber(turniness)+" set-motor-speed\n";
+			
+			if( commands.length() > 0 ) controlStream.write( commands.getBytes() );
+			
+			oldSpeed = speed;
+			oldTurniness = turniness;
+		}
+	}
+	
+	public static void main( String[] args ) throws Exception {
+		final RCCarControl rcc = RCCarControl.forSerialPort("COM10");
+		
 		final ArrowPanel arrowPanel = new ArrowPanel();
 		arrowPanel.setBackground(Color.BLACK);
 		arrowPanel.setPreferredSize(new Dimension(256, 256));
@@ -129,6 +180,12 @@ public class ControllerUI
 				boolean right = t.keyIsDown(KeyEvent.VK_RIGHT) || t.keyIsDown(KeyEvent.VK_D);
 				
 				arrowPanel.setDirection(calcDirection( up, down, left, right ));
+				try {
+					rcc.setGoingness( up, down, left, right );
+				} catch( IOException e ) {
+					e.printStackTrace();
+					System.exit(1);
+				}
 			}
 		});
 		arrowPanel.addKeyListener(inputWatcher);
@@ -139,6 +196,7 @@ public class ControllerUI
 		f.addWindowListener(new WindowAdapter() {
 			@Override public void windowClosing(WindowEvent e) {
 				f.dispose();
+				System.exit(0);
 			}
 		});
 		f.setVisible(true);
